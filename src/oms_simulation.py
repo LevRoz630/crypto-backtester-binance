@@ -26,27 +26,19 @@ class OMSClient:
     - Tracks balances and symbol positions
     - Converts target USDT to quantity at current price
     - Records trade history and realized PnL on close/flip
-    - Serves prices via HistoricalDataCollector with per-timestep caching
     """
     
     def __init__(self, historical_data_dir: str = "../hku-data/test_data"):
         self.historical_data_dir = Path(historical_data_dir)
         self.positions = {}  # Open Positions for Perpetuals: {symbol: {quantity, value, side, entry_price, pnl}}
-        self.balance = {"USDT": 10000.0}  # Balance for trading
+        self.balance = 10000.0  # Balance for trading
         self.trade_history = []  # All trades executed
         self.current_time = None  # Current backtest time
         self.data_manager = None  # Will be set by backtester
-
-        self.timestep = None
         
     def set_current_time(self, current_time: datetime):
         """Set current backtest time"""
         self.current_time = current_time
-
-
-    def set_timestep(self, timestep: timedelta):
-        """Set timestep"""
-        self.timestep = timestep
 
     def set_data_manager(self, data_manager: HistoricalDataCollector):
         """Set data manager"""
@@ -103,7 +95,6 @@ class OMSClient:
                 
         except Exception as e:
             logger.error(f"Error setting target position: {e}")
-            return {"id": f"error_{len(self.trade_history)}", "status": "error", "message": str(e)}
  
     def _set_position(self, symbol: str, trade_amount_usdt: float, position_side: str, instrument_type: str) -> Dict[str, Any]:
         """Set position using USDT amount; converts to quantity at current price"""
@@ -113,8 +104,8 @@ class OMSClient:
 
         # Interpret incoming target_value as an amount of USDT to deploy
         trade_value = float(trade_amount_usdt)
-        if trade_value > self.balance['USDT']:
-            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance['USDT']}")
+        if trade_value > self.balance:
+            raise ValueError(f"Insufficient USDT balance. Required: {trade_value}, Available: {self.balance}")
 
         # Convert USDT → base-asset quantity at current mark/index price
         trade_qty = trade_value / current_price
@@ -133,17 +124,11 @@ class OMSClient:
         current_side = pos.get('side', 'LONG')
         current_entry_price = float(pos.get('entry_price', 0.0))
 
-        # Futures vs spot cash semantics
-        is_future = (instrument_type == 'future')
-
         # Handle explicit close before side comparisons to avoid misrouting CLOSE
         if position_side == 'CLOSE':
             # Explicit close: realize PnL and zero out the position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance['USDT'] += (pnl or 0.0)
-            # Only restore principal for spot; futures do not move principal
-            if not is_future:
-                self.balance['USDT'] += (principal or 0.0)
+            self.balance += (pnl or 0.0) + (principal or 0.0)
             pos['pnl'] = pos.get('pnl', 0.0) + (pnl or 0.0)
             self.positions[symbol] = {
                 'quantity': 0.0,
@@ -156,9 +141,7 @@ class OMSClient:
 
         elif position_side == current_side:
             # Add to an existing position on the same side, update VWAP entry_price
-            # For futures, do not subtract principal from cash
-            if not is_future:
-                self.balance['USDT'] -= trade_value
+            self.balance -= trade_value
             new_qty = current_quantity + trade_qty
             self.positions[symbol] = {
                 'quantity': new_qty,
@@ -174,11 +157,8 @@ class OMSClient:
         elif position_side != current_side:
             # Flip side: realize PnL on the old side, then open a fresh position
             pnl, principal = self.close_position(symbol, instrument_type)
-            self.balance['USDT'] += (pnl or 0.0)
-            # Only restore and re-spend principal for spot
-            if not is_future:
-                self.balance['USDT'] += (principal or 0.0)
-                self.balance['USDT'] -= trade_value
+            self.balance += (pnl or 0.0) + (principal or 0.0)
+            self.balance -= trade_value
             self.positions[symbol] = {
                 'quantity': trade_qty,
                 'value': abs(trade_qty) * current_price,
@@ -199,7 +179,7 @@ class OMSClient:
             'quantity': self.positions[symbol]['quantity'] ,
             'value': self.positions[symbol]['value'] ,
             'price': self.positions[symbol]['entry_price'],
-            'balance_after': self.balance.copy()
+            'balance_after': self.balance
         })
         
         return {"id": f"backtest_{len(self.trade_history)}", "status": "success"}
@@ -215,30 +195,15 @@ class OMSClient:
 
         try:
             base_symbol = self._normalize_symbol(symbol, instrument_type)
-            store = self.data_manager.spot_ohlcv_data if instrument_type == 'spot' else (
-                self.data_manager.perpetual_mark_ohlcv_data if instrument_type == 'future' else None
-            )
-            if store is None:
-                raise ValueError(f"Invalid price type: {instrument_type}")
-            df = store.get(base_symbol)
-            if df is None or df.empty:
-                return None
-            ts = df['timestamp']
-            if not pd.api.types.is_datetime64_any_dtype(ts):
-                df = df.copy()
-                df['timestamp'] = pd.to_datetime(ts, errors='coerce')
-            # add timestep or we will ge tthe price that's late by a timestep as we make the decision timestep
-            time_step_diff = df['timestamp'].diff().min()
-            df_now = df[df['timestamp'] <= (self.current_time + time_step_diff)]
 
-            if df_now.empty:
-                return None
-            price = float(df_now['close'].iloc[-1])
+            df = self.data_manager.load_data_period(base_symbol, "15m", "ohlcv_spot" if instrument_type == 'spot' else "mark_ohlcv_futures", self.current_time, self.current_time + timedelta(minutes=15), load_from_class=False)
+            if df.empty:
+                raise Exception(f"No data for {symbol} {instrument_type} between {self.current_time} and {self.current_time + timedelta(minutes=15)} in cache")
+            price = float(df['close'].iloc[-1])
             return price
         except Exception as e:
             logger.error(f"Error getting current {instrument_type} price for {symbol}: {e}")
-        
-        return None
+            return None
     
     def close_position(self, symbol: str, instrument_type: str):
         """Update PnL for all perpetual positions"""
@@ -256,13 +221,12 @@ class OMSClient:
         return pnl, principal
 
 
-    def get_total_portfolio_value(self) -> float:
-        """Get total portfolio value including balances and appropriate position valuation.
-
-        - Spot: add current notional value of holdings
-        - Futures: add unrealized PnL only (no principal counted)
+    def update_portfolio_value(self) -> float:
         """
-        total_value = self.balance.get('USDT', 0.0)
+        Update and return total portfolio value including balances and appropriate position valuation.
+        
+        """
+        total_value = self.balance
 
         for symbol, pos in self.positions.items():
             instrument_type = pos.get('instrument_type', 'future' if symbol.endswith('-PERP') else 'spot')
@@ -285,18 +249,15 @@ class OMSClient:
                     total_value += unrealized
                 # Maintain notional and latest value fields for reporting
                 pos['value'] = abs(quantity) * current_price
-            else:
-                # Spot: full notional value contributes to portfolio value
-                pos['value'] = abs(quantity) * current_price
                 total_value += pos['value']
         return total_value
 
     def get_position_summary(self) -> Dict[str, Any]:
         """Get a summary of all positions and balances"""
         summary = {
-            'balances': self.balance.copy(),
+            'balances': self.balance,
             'positions': {},
-            'total_portfolio_value': self.get_total_portfolio_value(),
+            'total_portfolio_value': self.update_portfolio_value(),
             'total_trades': len(self.trade_history)
         }
         
