@@ -73,17 +73,17 @@ def main():
     backtester.plot_returns()
     backtester.plot_positions()
 
-    # results = backtester.run_permutation_backtest(
-    #     strategy=strategy,
-    #     position_manager=position_manager,
-    #     start_date=start_date,
-    #     end_date=end_date,
-    #     time_step=timedelta(days = 1),
-    #     market_type="futures",
-    #     permutations=100,
-    # )
-    # print("p_value:", results.get("p_value"))
-    # print("sharpes:", results.get("sharpes"))
+    results = backtester.run_permutation_backtest(
+        strategy=strategy,
+        position_manager=position_manager,
+        start_date=start_date,
+        end_date=end_date,
+        time_step=timedelta(days = 1),
+        market_type="futures",
+        permutations=100,
+    )
+    print("p_value:", results.get("p_value"))
+    print("sharpes:", results.get("sharpes"))
 
 if __name__ == "__main__":
     main()

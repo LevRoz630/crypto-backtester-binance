@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
-from oms_simulation import OMSClient
+from .oms_simulation import OMSClient
 import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from hist_data import HistoricalDataCollector
-from format_utils import format_positions_table, format_balances_table
+from .hist_data import HistoricalDataCollector
+from .format_utils import format_positions_table, format_balances_table
 import plotly.graph_objects as go
 import json
 

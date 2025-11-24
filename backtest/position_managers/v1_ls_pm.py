@@ -56,7 +56,7 @@ class V1LSPositionManager:
                 by_symbol[sym] = o
             elif sym not in by_symbol or by_symbol[sym].get('side') != 'CLOSE':
                 by_symbol[sym] = o
-        return list(by_symbol.values())
+        return list (by_symbol.values())
 
 
     def _set_weights(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

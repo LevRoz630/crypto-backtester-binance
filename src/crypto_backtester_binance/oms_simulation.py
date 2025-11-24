@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 import json
-from hist_data import HistoricalDataCollector
+from .hist_data import HistoricalDataCollector
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
